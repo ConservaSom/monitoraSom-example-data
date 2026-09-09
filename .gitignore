@@ -27,6 +27,7 @@ detections/
 **/_output/
 **/.quarto/
 **/*_files/
+**/*_cache/
 *.html
 
 # Bundles produced by ep_tar()

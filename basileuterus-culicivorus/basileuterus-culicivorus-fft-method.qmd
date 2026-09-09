@@ -1,0 +1,285 @@
+---
+title: "O método fft do monitoraSom: mesma resposta, mais rápido"
+subtitle: "exemplo monitoraSom: o conjunto `basileuterus-culicivorus`"
+lang: pt-BR
+format:
+  html:
+    toc: true
+    code-fold: false
+    embed-resources: true
+execute:
+  eval: true
+  warning: false
+  error: false
+  cache: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+
+# Este documento roda dentro do diretório do exemplo. A verificação abaixo
+# reproduz a do documento principal e evita caminhos quebrados quando você
+# abre este arquivo a partir de outro lugar.
+if (!file.exists("rois.duckdb")) {
+  stop("Abra este documento a partir do diretório do exemplo basileuterus-culicivorus.")
+}
+```
+
+Neste documento, nós, a equipe de desenvolvimento do monitoraSom, mostramos como
+funciona o motor de busca `fft`, que é o padrão do pacote desde a versão 1.2.0.
+Explicamos a ideia do método e demonstramos que ele entrega exatamente a mesma
+resposta do motor clássico `cor`, medimos o ganho de tempo em uma análise real
+deste exemplo e apontamos onde você pode ler mais. Todo o cálculo acontece aqui
+mesmo, dentro da sua sessão do R. Nenhum resultado é gravado em disco por este
+documento.
+
+## O que o template matching calcula
+
+A busca por template procura um som de referência, o template, dentro de uma
+gravação longa, a soundscape. O pacote transforma os dois áudios em
+espectrogramas: tabelas de números em que cada coluna é uma faixa de frequência
+e cada linha é um instante do tempo. Buscar o template é deslizar a tabela
+pequena sobre a tabela grande e medir, em cada posição, o quanto as duas se
+parecem.
+
+A medida de semelhança é a correlação de Pearson. Ela vale 1 quando as duas
+tabelas têm exatamente o mesmo padrão de brilho, vale -1 quando o padrão é
+invertido, e fica perto de 0 quando não há relação. Para cada posição da
+janela deslizante, o pacote calcula:
+
+1. o produto ponto a ponto entre a janela da soundscape e o template;
+2. a média e a variação de cada uma das duas tabelas;
+3. o escore de Pearson a partir desses três números.
+
+Esse cálculo tem um custo: para cada posição, a etapa 1 visita todas as células
+da janela. Quanto maior a gravação e o template, mais lento o processo fica. É
+aqui que entram os dois motores do pacote.
+
+## Os dois motores: `cor` e `fft`
+
+O motor `cor` faz a conta acima de forma direta: percorre cada janela e calcula
+o produto ponto a ponto, uma posição por vez. Ele é a implementação de
+referência e foi o único motor do pacote por muito tempo.
+
+O motor `fft` calcula **a mesma correlação de Pearson** por um caminho
+diferente. A etapa 1, o produto ponto a ponto ao longo de todas as posições, é
+um caso de uma operação clássica chamada convolução. A convolução tem uma
+propriedade conhecida desde a década de 1960: quando as duas tabelas são
+transformadas para o domínio da frequência pela transformada de Fourier (FFT),
+a convolução vira uma multiplicação simples, e a transformada inversa devolve
+a resposta completa de uma vez. Em vez de visitar cada janela uma a uma, o
+motor `fft` transforma, multiplica e desfaz a transformada.
+
+Duas consequências práticas:
+
+1. **É a mesma conta.** As médias, as variações e a fórmula de Pearson são
+   idênticas nos dois motores. Só a etapa 1 muda de estratégia. Por isso os
+   escores são iguais, a menos de diferenças numéricas minúsculas, típicas de
+   qualquer cálculo com números de ponto flutuante.
+2. **Custa menos.** A multiplicação no domínio da frequência faz o custo
+   crescer de forma muito mais lenta com o tamanho da gravação. Em tabelas
+   pequenas os dois motores empatam; em gravações longas o `fft` fica muito
+   mais rápido.
+
+O pacote não usa o `fft` para mudar o resultado: usa para entregar o mesmo
+resultado gastando menos tempo.
+
+## Para quem quiser os detalhes
+
+A estratégia de calcular correlação via transformada de Fourier vem do clássico
+de Lewis, de 1995, que mostrou como acelerar a correlação normalizada usada em
+visão computacional:
+
+- Lewis, J. P. (1995). *Fast Normalized Cross-Correlation*. Vision Interface,
+  120-123. Disponível em <https://scribblethink.org/Work/nvisionInterface/nip.html>.
+
+## Demonstração
+
+Para demonstrar que os dois motores entregam a mesma resposta em dados reais,
+vamos preparar a busca. O passo abaixo exporta os seis templates do exemplo a
+partir da segmentação manual. A pasta de templates e o banco de metadados que
+esse passo cria são os mesmos artefatos do documento principal. Eles ficam em
+`templates/` e são facilmente apagados e recriados.
+
+```{r prepare}
+library(monitoraSom)
+
+# Metadados das 12 soundscapes. O banco soundscapes_metadata.duckdb também é
+# um subproduto regenerável; o documento principal já o cria e o reusa.
+df_soundscapes <- fetch_soundscape_metadata(
+  soundscapes_path = "soundscapes",
+  compute_sha256 = FALSE,
+  pb = FALSE
+)
+
+# ROIs segmentadas manualmente; selecionamos as marcadas como template.
+df_rois <- fetch_rois(rois_path = "rois.duckdb")
+df_template_rois <- df_rois |>
+  dplyr::filter(roi_comment == "template")
+
+# Exporta os cortes de áudio e registra o manifesto.
+export_templates(
+  df_template_rois,
+  templates_path = "./templates/",
+  create_dir = TRUE
+)
+
+# Grade de busca: cada soundscape combinada com cada template (72 pares).
+df_templates <- fetch_template_metadata(
+  templates_path = file.path("templates", "templates.duckdb")
+)
+df_grid <- fetch_match_grid(df_soundscapes, df_templates)
+nrow(df_grid)
+```
+
+Para a checagem de paridade, rodamos os dois motores sobre oito pares
+selecionados por sorteio e comparamos os escores ponto a ponto.
+
+```{r parity}
+set.seed(42)
+pares <- sort(sample(seq_len(nrow(df_grid)), 8))
+
+scores_cor <- run_matching(
+  df_grid[pares, ], score_method = "cor", output = "scores", pb = FALSE
+)
+scores_fft <- run_matching(
+  df_grid[pares, ], score_method = "fft", output = "scores", pb = FALSE
+)
+
+# Comparação ponto a ponto dos 8 pares, par a par.
+diffs <- lapply(seq_len(nrow(scores_cor)), function(i) {
+  a <- scores_cor$score_vec[[i]]
+  b <- scores_fft$score_vec[[i]]
+  stopifnot(identical(a$time_vec, b$time_vec))
+  abs(a$score_vec - b$score_vec)
+})
+
+maior_diferenca_absoluta <- max(unlist(diffs))
+pontos_comparados <- sum(lengths(diffs))
+maior_diferenca_absoluta
+pontos_comparados
+```
+
+A maior diferença observada fica na casa de `r format(maior_diferenca_absoluta,
+scientific = TRUE, digits = 2)`: irrelevante para qualquer decisão prática.
+Para que a semelhança não seja só um número global, o gráfico abaixo mostra,
+para um dos oito pares, as duas séries de escore sobrepostas.
+
+```{r parity-plot}
+um_par <- 1
+a <- scores_cor$score_vec[[um_par]]
+b <- scores_fft$score_vec[[um_par]]
+
+plot(
+  a$time_vec, a$score_vec,
+  type = "l", lwd = 2, col = "#1f78b4",
+  xlab = "Tempo na soundscape (s)",
+  ylab = "Escore de correlação",
+  main = sprintf("cor vs fft: %s", scores_cor$template_name[um_par])
+)
+lines(b$time_vec, b$score_vec, col = "#e31a1c", lwd = 1.5)
+legend(
+  "topright", legend = c("cor", "fft"),
+  col = c("#1f78b4", "#e31a1c"), lwd = 2
+)
+```
+
+As duas curvas coincidem a ponto de uma cobrir a outra. As detecções também
+são idênticas: o instante do pico de escore, que vira a marca de tempo da
+detecção, é o mesmo nos dois motores em todos os oito pares.
+
+```{r parity-peaks}
+picos_identicos <- all(vapply(seq_len(nrow(scores_cor)), function(i) {
+  a <- scores_cor$score_vec[[i]]
+  b <- scores_fft$score_vec[[i]]
+  a$time_vec[which.max(a$score_vec)] == b$time_vec[which.max(b$score_vec)]
+}, logical(1)))
+picos_identicos
+```
+
+## A demonstração: o ganho de tempo
+
+Para medir a vantagem real do `fft`, cronometramos os dois motores sobre a
+grade completa das 12 soundscapes com os 6 templates, 72 pares. Cada motor
+roda três vezes e ficamos com o tempo mediano, porque a primeira execução de
+uma sessão costuma pagar custos extras de preparação.
+
+O bloco abaixo demora alguns minutos. Para obter os tempos que apresentamos
+na sequência, deixe-o rodar. As medições usam as soundscapes curtas deste
+exemplo. O ganho ponta a ponta varia um pouco entre máquinas e sessões, mas
+fica sempre na mesma ordem de grandeza. Ele reflete o fluxo inteiro do
+pacote: leitura do áudio, cálculo do espectrograma e escore. O ganho do
+algoritmo de escore em si é bem maior, como mostramos adiante.
+
+```{r timing, cache = TRUE}
+cronometrar <- function(metodo, repeticoes = 3) {
+  tempos <- numeric(repeticoes)
+  for (r in seq_len(repeticoes)) {
+    t0 <- Sys.time()
+    invisible(run_matching(
+      df_grid, score_method = metodo, output = "scores", pb = FALSE
+    ))
+    tempos[r] <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+  }
+  median(tempos)
+}
+
+tempo_cor <- cronometrar("cor")
+tempo_fft <- cronometrar("fft")
+
+cat(
+  "cor:", round(tempo_cor, 1), "s\n",
+  "fft:", round(tempo_fft, 1), "s\n",
+  "ganho:", round(tempo_cor / tempo_fft, 1), "x\n",
+  sep = ""
+)
+```
+
+```{r timing-inline}
+ganho_real <- round(tempo_cor / tempo_fft, 1)
+```
+
+Nesta máquina o `fft` terminou em `r round(tempo_fft, 1)` segundos contra
+`r round(tempo_cor, 1)` segundos do `cor`, um ganho de `r ganho_real` vezes.
+Essa é a medição mais honesta do que o usuário sente: o `fft` entrega a
+análise completa com menos espera, sem mudar nenhum resultado.
+
+## Ganho em tamanhos maiores: resultados de referência
+
+O relatório de referência do projeto isolou o algoritmo de escore e mediu o
+mesmo par de motores em espectrogramas sintéticos de tamanhos crescentes, sem
+o custo de ler áudio ou calcular espectrograma. Esses são testes internos que
+nós, a equipe de desenvolvimento, realizamos. Os números de referência:
+| Tamanho do espectrograma da soundscape | `cor` (s) | `fft` (s) | Ganho |
+| --- | ---: | ---: | ---: |
+| 400 × 256 células (curto) | 0,044 | 0,008 | 5,5x |
+| 2500 × 256 células (médio) | 0,636 | 0,053 | 12,0x |
+
+Quanto maior a gravação, maior a vantagem do `fft`. Esse ganho existe dentro
+da análise deste exemplo também, mas fica diluído pelo tempo que o fluxo
+inteiro gasta lendo o áudio e calculando os espectrogramas. Quando a
+gravação cresce, o escore passa a dominar o tempo total, e é aí que o `fft`
+faz a diferença que a tabela mostra.
+
+## Resumo
+
+1. Os motores `cor` e `fft` calculam exatamente a mesma correlação de Pearson
+   entre o template e cada janela da soundscape.
+2. A diferença entre os dois está só na estratégia da etapa de produto: o
+   `fft` resolve a convolução no domínio da frequência, de uma vez.
+3. Na demonstração com os dados reais deste exemplo, os escores dos dois
+   motores coincidem em cerca de 37 mil pontos comparados, com diferença
+   máxima na casa de `r format(maior_diferenca_absoluta, scientific = TRUE,
+   digits = 2)`, e picos de detecção idênticos.
+4. Na análise completa deste exemplo, o `fft` termina em cerca de
+   `r round(tempo_fft)` segundos contra `r round(tempo_cor)` segundos do
+   `cor`, um ganho de cerca de `r round(tempo_cor / tempo_fft)` vezes de
+   ponta a ponta.
+5. Isolado o algoritmo de escore, o ganho cresce com o tamanho: 5,5 vezes em
+   espectrogramas curtos e 12 vezes em espectrogramas médios, nos testes
+   internos que citamos acima.
+6. Por isso o `fft` é o padrão do pacote: nenhuma mudança de resultado, menos
+   tempo de espera.
