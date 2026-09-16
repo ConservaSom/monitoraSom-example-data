@@ -65,8 +65,8 @@ lugar e tudo continua funcionando quando seguir com as análises. Isso é
 especialmente importante quando se pretende colaborar com outros usuários.
 
 ```
-bcu/                     diretório raiz do projeto
-├── bcu.qmd              este documento
+basileuterus-culicivorus/   diretório raiz do projeto
+├── basileuterus-culicivorus.qmd   este documento
 ├── recordings/          diretório de gravações focais
 │   ├── Bcu_1.wav        2 gravações focais de onde extrairemos os templates
 │   └── Bcu_2.wav
@@ -84,8 +84,9 @@ a seguir.
 O nosso primeiro passo é preparar o ambiente para as análises de forma que a
 sessão ativa do R saiba onde estão os arquivos que serão lidos e para onde vão
 os arquivos que vão ser exportados. Idealmente, esse arquivo de exemplo,
-"bcu.qmd", deverá estar presente na raiz do diretório do projeto para que os
-caminhos sejam corretamente identificados ao longo das análises.
+`basileuterus-culicivorus.qmd`, deverá estar presente na raiz do diretório do
+projeto para que os caminhos sejam corretamente identificados ao longo das
+análises.
 
 ```{r setup}
 # Vamos primeiro importar os pacotes que contêm as funções de que vamos precisar
@@ -95,11 +96,13 @@ library(dplyr)
 # O comando abaixo verifica se a sessão do R já está usando o diretório correto
 # ao procurar pelo arquivo com os dados de segmentação e, caso não encontre,
 # define o diretório do exemplo como diretório de trabalho
-if (!file.exists("rois.duckdb")) setwd(file.path("example_pack", "bcu"))
+if (!file.exists("rois.duckdb")) setwd("basileuterus-culicivorus")
 
 # Se o caminho tiver sido definido corretamente, antes de rodar o restante da
-# análise, o comando abaixo irá retornar o seguinte output:
-# > [1] "bcu.html"    "bcu.qmd"     "recordings"  "rois.duckdb" "soundscapes"
+# análise, o comando abaixo irá retornar o seguinte output (a lista pode variar,
+# conforme os arquivos que você já tiver gerado):
+# > [1] "basileuterus-culicivorus.qmd" "basileuterus-culicivorus.Rmd"
+# > [3] "recordings" "rois.duckdb" "soundscapes"
 list.files(getwd())
 ```
 
@@ -349,9 +352,9 @@ Depois que você roda tudo o que mostramos acima, a pasta do exemplo passa a
 conter:
 
 ```
-bcu/
-├── bcu.qmd                        este documento (já existia)
-├── bcu.html                       o documento renderizado
+basileuterus-culicivorus/
+├── basileuterus-culicivorus.qmd    este documento (já existia)
+├── basileuterus-culicivorus.html   o documento renderizado
 ├── rois.duckdb                    as 72 ROIs (já existia)
 ├── recordings/                    as 2 gravações focais (já existia)
 ├── soundscapes/                   as 12 gravações de busca (já existia)
