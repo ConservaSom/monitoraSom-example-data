@@ -6,8 +6,11 @@
 # is ignored. See harness/clean_examples.sh for the byproduct names.
 # =============================================================================
 
-# Maintenance tooling (not distributed with the examples)
-harness/
+# Maintenance tooling. harness/ IS tracked: it holds the checks that keep the
+# stores honest (ep_verify/ep_sync_signals), so an untracked harness meant the
+# guard against a bug could not be versioned alongside the fix for it.
+# It is still never a pack member - EP_EXCLUDE_TOP keeps it out of MANIFEST.csv
+# and ep_tar(), so it is not distributed with the examples.
 .claude/
 .pi/
 
