@@ -333,7 +333,7 @@ nrow(df_detecs)
 # df_soundscapes <- fetch_soundscape_metadata("soundscapes/")
 # df_templates   <- fetch_template_metadata("templates/templates.duckdb")
 # df_grid        <- fetch_match_grid(df_soundscapes, df_templates)   # 72 pares
-# df_scores      <- run_matching(df_grid, score_method = "fft")
+# df_scores      <- run_matching(df_grid, score_method = "fft", output = "scores")
 # df_detecs      <- fetch_score_peaks(df_scores, min_score = 0.4)
 
 #' 

@@ -290,6 +290,8 @@ EP_EXPECT <- list(
   # *.html is a render product of the .qmd sources: the examples distribute
   # .qmd/.Rmd/.R, never the rendered page (plan DEC-6). The same applies to
   # knitr/Quarto render sidecars (*_files, *_cache): regenerable, never members.
+  # *.Rproj is the maintainer's local RStudio session (it carries the checkout
+  # directory's name): never shipped, and never a member for the same reason.
   # Match the DIRECTORY component, not the basename: `name %in% "templates"`
   # only ever matched a file literally called "templates", so every cut inside
   # templates/ counted as a member and the manifest listed regenerable files.
@@ -297,6 +299,7 @@ EP_EXPECT <- list(
   keep <- !(top %in% EP_EXCLUDE_TOP | grepl(dirs, rel) |
               rel %in% EP_EXCLUDE_FILE |
               grepl("\\.html$", name) |
+              grepl("\\.Rproj$", name) |
               grepl("(_files|_cache)$", name))
   f[keep]
 }

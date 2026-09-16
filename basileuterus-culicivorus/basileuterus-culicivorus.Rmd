@@ -54,7 +54,8 @@ espécie de interesse foi encontrado*.
 
 ## Estrutura do diretório
 
-Este conjunto de dados foi construído para ser autosuficiente e permitir o teste de um dos fluxos completos de análise do monitoraSom para detecção de
+Este conjunto de dados foi construído para ser autosuficiente e permitir o teste 
+de um dos fluxos completos de análise do monitoraSom para detecção de
 uma espécie alvo. O arquivo `rois.duckdb` contém dados de segmentação que
 nós, a equipe de desenvolvimento do `monitoraSom` preparamos para essa
 demonstração. Em um projeto recém iniciado, dados de segmentação estarão
@@ -334,7 +335,7 @@ precisar inspecionar ou reaproveitar um resultado intermediário.
 df_soundscapes <- fetch_soundscape_metadata("soundscapes/")
 df_templates   <- fetch_template_metadata("templates/templates.duckdb")
 df_grid        <- fetch_match_grid(df_soundscapes, df_templates)   # 72 pares
-df_scores      <- run_matching(df_grid, score_method = "fft")
+df_scores      <- run_matching(df_grid, score_method = "fft", output = "scores")
 df_detecs      <- fetch_score_peaks(df_scores, min_score = 0.4)
 ```
 
