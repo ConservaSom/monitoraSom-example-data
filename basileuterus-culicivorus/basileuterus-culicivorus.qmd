@@ -313,14 +313,24 @@ Quando você quiser salvá-los, basta usar o argumento `output_db`.
 substituiu o csv mais comumente usado pelos usuários. Aqui devemos convencer o
 usuário de que isso é de fato melhor. -->
 
-```{r persisting, eval = FALSE}
+```{r persisting}
+# A pasta precisa existir: o monitoraSom nunca cria diretório por conta própria,
+# para que um caminho errado apareça como erro em vez de espalhar arquivos.
+dir.create("detections", showWarnings = FALSE)
+
 template_matching(
   soundscapes_path = "soundscapes/",
   templates_path = "templates/templates.duckdb",
   min_score = 0.4,
-  output_db = "detections.duckdb"
+  output_db = "detections/detections.duckdb"
 )
 ```
+
+
+Esse arquivo é o mesmo que a etapa de validação lê e no qual o app de validação
+grava os vereditos. Por isso ele vem agora, e não no fim: as duas etapas
+seguintes trabalham sobre ele, e cada uma escreve em uma coluna diferente.
+
 
 ## Os passos por dentro do orquestrador
 
@@ -346,6 +356,293 @@ necessariamente no uso de toda a grade detalhada em `df_grid`.
 não for necessária para buscas mais detalhadas de padrões que precisem da
 totalidade dos scores, retendo somente as detecções como produto final.
 
+## Julgando as detecções por sobreposição
+
+As detecções que acabamos de obter são candidatas, não resultados: o matching
+mede semelhança, e semelhança não é identificação. Para saber quais delas são
+reais, precisamos de um conjunto de referência que cubra as mesmas gravações que
+percorremos. Esse conjunto já existe: são as ROIs segmentadas manualmente nas 12
+soundscapes.
+
+Nem toda ROI do exemplo pode julgar uma detecção. O conjunto que usamos é este:
+
+```{r reference-truth}
+# Uma detecção só pode ser julgada em gravações que foram revisadas. Das 12
+# soundscapes, 10 têm cantos marcados e 2 trazem a marca 'no signals of
+# interest' — revisadas, nada encontrado. Todas entram.
+soundscapes_rois <- df_rois |>
+  filter(soundscape_file %in% df_soundscapes$soundscape_file)
+
+nrow(soundscapes_rois)   # 54 ROIs de referência
+```
+
+As 18 ROIs das gravações focais ficam de fora: elas serviram para recortar os
+templates, e não para testá-los. Julgar uma detecção contra o próprio trecho que
+a produziu seria medir o acerto com a resposta na mão. As 54 que sobram são
+cantos demarcados nas gravações de busca — 52 cantos e as 2 marcas de revisão.
+
+A função `validate_by_overlap()` compara as duas tabelas e emite um veredito por
+detecção. O critério é a sobreposição das caixas: a detecção precisa cruzar uma
+ROI de referência, na mesma gravação e com o mesmo rótulo. Sobreposição, e não
+coincidência de limites, porque o pico do escore marca um instante, e a ROI marca
+o canto inteiro.
+
+```{r validate}
+# promote_to_roi = FALSE: aqui a validação só julga. Num projeto, o argumento
+# output_db também grava os vereditos no banco de detecções.
+val <- validate_by_overlap(
+  df_detecs, soundscapes_rois,
+  validation_user = "vignette",
+  promote_to_roi = FALSE
+)
+
+df_validated <- val$detections_validated
+table(df_validated$validation)
+nrow(val$false_negatives)
+```
+
+O retorno são duas tabelas, porque são duas perguntas diferentes. A primeira,
+`detections_validated`, traz uma linha por detecção, com o veredito `TP`
+(verdadeiro positivo) ou `FP` (falso positivo). A segunda, `false_negatives`,
+traz uma linha por par de template e ROI de referência que **nenhuma** detecção
+daquele template alcançou: é a parte da verdade que os templates deixaram passar.
+
+::: {.callout-important}
+## O que "falso positivo" quer dizer aqui
+
+Há muitos: mais falsos positivos que verdadeiros positivos. A razão é
+geométrica. As 442 detecções foram julgadas contra as ROIs das 12 gravações de
+busca; 41 delas caíram nas duas gravações marcadas como revisadas e sem canto
+algum, e as 201 restantes caíram em região sem ROI por perto. Só que
+"sem ROI por perto" e "sem canto" não são a mesma coisa: só cantos de *B.
+culicivorus* foram segmentados, então tudo o que não é o canto da espécie-alvo
+ficou sem resposta registrada. Leia o resultado como *"erros entre as
+vocalizações que rotulamos"*, nunca como *"erros do template"*. Para o número
+real seria preciso um corpus anotado exaustivamente, com todas as espécies
+incluídas.
+:::
+
+::: {.callout-note}
+## Por que a validação por sobreposição vem antes do app
+
+O app de validação grava o veredito **na própria detecção**, na coluna de
+validação manual. Rodar `validate_by_overlap()` depois não apaga esse trabalho:
+as duas validações convivem na mesma linha, em colunas diferentes. A ordem entre
+elas é livre, e mais adiante vamos usar exatamente isso para comparar os dois
+julgamentos.
+:::
+
+## Abrindo o app de validação
+
+O app de validação mostra cada detecção sobre o espectrograma da gravação, e
+apresenta o template ao lado, para você comparar. É aí que você ouve o áudio e
+dá o seu veredito: verdadeiro positivo, falso positivo, desconhecido, ou deixa
+sem validar.
+
+```{r val-app, eval = FALSE}
+launch_validation_app(
+  project_path = "./",
+  validation_user = "your-name",
+  input_path = "detections/detections.duckdb",   # o banco do matching
+  soundscapes_path = "soundscapes",             # pasta das gravações
+  templates_path = "templates",                 # cortes, para o painel lateral
+  val_subset = "NV",                            # fila: só o que falta validar
+  dyn_range_templ = c(-90, -6), dyn_range_detec = c(-90, -36),
+  wl = 512, ovlp = 50
+)
+```
+
+Três argumentos merecem atenção. `input_path` é o banco que acabamos de criar e
+que a validação por sobreposição também leu — o app grava os vereditos **nele**,
+nas colunas `val_*`, sem tocar nas detecções. `templates_path` aponta para a
+pasta de cortes, e é o que habilita o painel com o template ao lado da detecção.
+`val_subset = "NV"` monta a fila de revisão com as detecções ainda sem veredito.
+
+Se você abrir o app agora, a fila virá vazia: a validação por sobreposição acabou
+de marcar as 442 detecções. Para revisar apesar disso, é preciso abrir a fila
+**incluindo** o que já foi julgado — o que transforma a revisão em auditoria, e é
+o exercício mais útil deste exemplo:
+
+```{r val-app-audit, eval = FALSE}
+launch_validation_app(
+  project_path = "./",
+  validation_user = "your-name",
+  input_path = "detections/detections.duckdb",
+  soundscapes_path = "soundscapes",
+  templates_path = "templates",
+  val_subset = c("NV", "TP", "FP"),   # inclui o que já foi julgado
+  overwrite = TRUE                    # permite regravar um veredito
+)
+```
+
+Você não precisa revisar tudo. Marque vinte ou trinta detecções e salve. O app
+retoma a sessão de onde parou, então dá para fechar e voltar depois.
+
+```{r manual-guard}
+# O app depende de você, então o documento funciona antes e depois de usá-lo.
+# Isto responde "já existem vereditos manuais neste banco?":
+manual_validations_ready <- function(path = "detections/detections.duckdb") {
+  if (!file.exists(path)) return(FALSE)
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  DBI::dbGetQuery(
+    con,
+    "SELECT count(*) AS n FROM signals
+      WHERE val_verdict IS NOT NULL AND val_user <> 'vignette'"
+  )$n > 0
+}
+
+manual_validations_ready()
+```
+
+A validação automática é assinada com `validation_user = "vignette"`. É o que
+separa, dentro do mesmo banco, o que julgamos por sobreposição do que você julgou
+a ouvido.
+
+```{r manual-compare}
+if (manual_validations_ready()) {
+  con <- DBI::dbConnect(duckdb::duckdb(), "detections/detections.duckdb",
+                        read_only = TRUE)
+  df_manual <- DBI::dbGetQuery(
+    con,
+    "SELECT signal_id, val_verdict AS manual FROM signals
+      WHERE val_verdict IS NOT NULL AND val_user <> 'vignette'"
+  )
+  DBI::dbDisconnect(con, shutdown = TRUE)
+
+  cat("Detecções revisadas por você:", nrow(df_manual), "\n")
+  print(table(df_manual$manual))
+
+  # Onde o julgamento por sobreposição e o seu discordam:
+  df_validated |>
+    select(detection_id, auto = validation) |>
+    inner_join(df_manual, by = c("detection_id" = "signal_id")) |>
+    with(table(auto, manual))
+} else {
+  cat("Ainda não há validações manuais.\n",
+      "Abra o app acima, revise algumas detecções e salve;\n",
+      "depois renderize este documento de novo para ver a comparação.\n")
+}
+```
+
+Se você pulou o app, o bloco apenas diz o que falta. Se revisou, ele cruza os
+dois julgamentos pelo identificador da detecção e mostra a tabela de concordância.
+Cada linha fora da diagonal é uma detecção em que a sobreposição e o seu ouvido
+discordaram — e é aí que a conversa sobre limiar fica concreta.
+
+## Ajustando o limiar a partir do julgamento
+
+Com o julgamento pronto, `diagnostic_validations()` responde à pergunta
+operacional: a partir de que escore uma detecção deixa de valer a pena?
+
+A função varre todos os escores observados como candidatos a limiar e calcula,
+em cada um, precisão, recall e F1. Retorna uma entrada por template, porque
+templates não são intercambiáveis: dois recortes da mesma espécie podem exigir
+limiares bem diferentes.
+
+```{r diagnostics}
+diags <- diagnostic_validations(val, build_plots = TRUE)
+
+length(diags)   # uma entrada por template
+names(diags[[1]])
+```
+
+O limiar automático de cada template sai do modelo logístico ajustado sobre o
+escore. O argumento `pos_prob` (padrão 0,95) define o quão exigente ele é: é a
+probabilidade de uma detecção no limiar escolhido ser verdadeira. Baixar o
+`pos_prob` afrouxa a exigência e traz o limiar para dentro da faixa observada.
+
+```{r diagnostic-table}
+# Os nomes codificam gravação, tempo e frequência do corte. Mostramos só o
+# essencial: o limiar automático e o melhor F1 da varredura.
+diag_summary <- do.call(rbind, lapply(names(diags), function(template_name) {
+  d <- diags[[template_name]]
+  if (is.null(d)) {
+    return(data.frame(template = template_name, cut = NA_real_,
+                      max_observed = NA_real_, precision = NA_real_,
+                      recall = NA_real_, F1 = NA_real_))
+  }
+  i <- which.max(d$diagnostics$F1_score)
+  data.frame(
+    template     = sub("^Bcu_[12]_Basileuterus_culicivorus_song_", "", template_name),
+    cut          = round(d$score_cut, 3),
+    max_observed = round(max(d$diagnostics$peak_score), 3),
+    precision    = round(d$diagnostics$precision[i], 3),
+    recall       = round(d$diagnostics$recall[i], 3),
+    F1           = round(d$diagnostics$F1_score[i], 3)
+  )
+}))
+
+diag_summary
+```
+
+Quatro dos seis templates pedem um limiar de 0,43 a 0,60, logo abaixo do maior
+escore que cada um chegou a produzir. Os outros dois caem no menor valor
+possível: são os dois templates sem nenhum falso positivo no conjunto. Sem falso
+positivo, a precisão é 1,0 em qualquer limiar, então baixar o corte só aumenta o
+recall e nada penaliza — o ótimo cai na ponta.
+
+::: {.callout-warning}
+## Um limiar na ponta é um aviso, não um resultado
+
+O número está certo e é inútil na prática. Os dois templates que caem no menor
+valor foram testados num corpus em que a única espécie anotada é a espécie-alvo:
+não havia quase nada capaz de gerar um falso positivo. Usar esses limiares em
+gravações novas, com outras espécies presentes, encheria a saída de detecções
+erradas.
+
+Para obter um limiar utilizável, faça a detecção com um `min_score` mais baixo,
+de modo que sons não-alvo entrem no conjunto e possam ser marcados como erro, ou
+valide manualmente em gravações onde outras espécies estejam anotadas. É
+exatamente o que o bloco do app convida você a fazer.
+:::
+
+### Os gráficos do diagnóstico
+
+Cada diagnóstico traz gráficos prontos. A curva de precisão e recall mostra a
+troca que a tabela acima resume em um ponto.
+
+```{r precrec-plot, fig.alt = "Precisão e recall contra o limiar de escore para um template do exemplo basileuterus; a precisão cai enquanto o recall sobe."}
+diags[[1]]$precrec_plot
+```
+
+Para um template com os dois tipos de erro no conjunto, a curva desenha a troca
+inteira: mexer o limiar para um lado ganha precisão e perde recall. Esse é o
+trade-off que você decide, e é uma questão ecológica antes de ser estatística —
+depende do custo de uma detecção falsa no seu estudo.
+
+O gráfico de densidade separa a distribuição dos escores dos verdadeiros
+positivos da dos falsos positivos. Uma separação larga indica um template que
+discrimina bem; uma sobreposição pesada indica que nenhum limiar resolverá.
+
+```{r density-plot, fig.alt = "Densidade dos escores de verdadeiros positivos comparada à dos falsos positivos para um template do exemplo."}
+diags[[1]]$plot_dens
+```
+
+### Do limiar às detecções finais
+
+O diagnóstico termina com um limiar por template. O último passo do fluxo aplica
+esse limiar às detecções, guardando só as que o alcançam. A função
+`filter_detections()` recebe uma tabela de limiares — o nome do template e o
+`min_score` — e devolve as detecções que o cruzam.
+
+```{r apply-thresholds}
+thresholds <- data.frame(
+  template_name = names(diags),
+  min_score = sapply(diags, function(d) if (is.null(d)) NA_real_ else d$score_cut),
+  row.names = NULL
+)
+
+df_final <- filter_detections(df_detecs, thresholds)
+
+c(candidates = nrow(df_detecs), kept = nrow(df_final))
+```
+
+Aqui o ciclo se fecha: as detecções mantidas são o conjunto que passou pelo
+crivo de cada template. É esse conjunto que você levaria para a análise
+biológica — e é ele que convém reprocessar no app, agora com atenção às linhas
+que mudaram de lado.
+
 ## O que foi criado
 
 Depois que você roda tudo o que mostramos acima, a pasta do exemplo passa a
@@ -362,7 +659,9 @@ basileuterus-culicivorus/
 ├── templates/                     ← criado ao recortar os templates
 │   ├── templates.duckdb           o manifesto: 1 linha por template
 │   └── Bcu_1_…wav                 os 6 cortes de áudio
-└── detections.duckdb              ← criado só se você usar output_db
+└── detections/
+    └── detections.duckdb          ← criado pelo matching; guarda as detecções
+                                     e os vereditos das duas validações
 ```
 
 | Arquivo | Quem cria | Para que serve |
@@ -370,18 +669,29 @@ basileuterus-culicivorus/
 | `soundscapes_metadata.duckdb` | `fetch_soundscape_metadata()` | duração, taxa de amostragem, data/hora e caminho de cada gravação; relê rápido em vez de varrer o áudio de novo |
 | `templates/*.wav` | `export_templates()` | os templates recortados, que a busca usa como referência |
 | `templates/templates.duckdb` | `export_templates()` | o manifesto que descreve os cortes; `fetch_template_metadata()` o lê, diretamente ou via a pasta `templates/` |
-| `detections.duckdb` | `template_matching(output_db =)` | as detecções salvas em disco, quando você não quer só o resultado na sessão |
+| `detections/detections.duckdb` | `template_matching(output_db =)` | as detecções em disco; é o banco que a validação por sobreposição e o app de validação leem e atualizam |
 
 Nenhum desses arquivos precisa ser guardado: se você apagar qualquer um deles,
-os comandos acima o recriam de forma idêntica. Os únicos arquivos insubstituíveis
-são os arquivos de audio e `rois.duckdb`, que contém a segmentação manual
+os comandos acima o recriam de forma idêntica. A ressalva é a mesma do app de
+segmentação: o banco de detecções carrega uma camada que **não** é recalculada —
+os vereditos que você deu a ouvido. Apagá-lo não perde a segmentação nem o áudio,
+mas as suas horas de revisão vão embora junto. Os únicos arquivos insubstituíveis
+são os arquivos de áudio e `rois.duckdb`, que contém a segmentação manual
 necessária para extração dos templates.
-produzimos para este exemplo.
 
 ## Próximo passo
 
-As detecções são candidatas, não resultados: o matching mede semelhança, e
-semelhança não é identificação. Para saber quais são reais você precisa de ROIs
-de referência cobrindo as mesmas gravações que foram percorridas, e então
-`validate_by_overlap()` julga cada detecção e `diagnostic_validations()` ajusta
-um limiar a partir desse julgamento.
+Este exemplo fecha o ciclo sobre si mesmo: as mesmas gravações serviram de busca
+e de referência, e a validação por sobreposição foi possível porque a segmentação
+já existia. Num projeto novo a ordem é outra — você grava, segmenta, extrai os
+templates, busca, e só então descobre o que o limiar deve ser. As três peças que
+faltam para o seu material são estas:
+
+- **Referência suficiente.** Sem ROIs revisadas nas mesmas gravações, a validação
+  por sobreposição não tem contra o que julgar. O app de segmentação é o começo.
+- **Revisão a ouvido.** O app de validação é o que diz se um falso positivo da
+  sobreposição é erro de verdade ou apenas ausência de anotação. É o único passo
+  do fluxo que não pode ser automatizado.
+- **Calibração por template.** Os quatro limiares de 0,43 a 0,60 que este
+  documento encontrou valem para este corpus e estes seis templates. Leve a
+  pergunta, não o número.

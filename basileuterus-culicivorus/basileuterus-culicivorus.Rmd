@@ -54,7 +54,7 @@ espécie de interesse foi encontrado*.
 
 ## Estrutura do diretório
 
-Este conjunto de dados foi construído para ser autosuficiente e permitir o teste 
+Este conjunto de dados foi construído para ser autosuficiente e permitir o teste
 de um dos fluxos completos de análise do monitoraSom para detecção de
 uma espécie alvo. O arquivo `rois.duckdb` contém dados de segmentação que
 nós, a equipe de desenvolvimento do `monitoraSom` preparamos para essa
