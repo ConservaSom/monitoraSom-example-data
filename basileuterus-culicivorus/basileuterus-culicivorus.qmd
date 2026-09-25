@@ -128,9 +128,12 @@ A função `fetch_rois()` traz as 72 ROIs registradas em `rois.duckdb` também p
 dentro do ambiente da nossa sessão do R.
 
 ```{r inputs}
+# csv_mirror = TRUE também grava uma cópia do banco em CSV, ao lado dele:
+# soundscapes_metadata_mirror.csv. A cópia é só para leitura.
 df_soundscapes <- fetch_soundscape_metadata(
   soundscapes_path = "soundscapes",
-  output_file = "soundscapes_metadata.duckdb"
+  output_file = "soundscapes_metadata.duckdb",
+  csv_mirror = TRUE
 )
 glimpse(df_soundscapes)
 ```
@@ -148,8 +151,20 @@ padronizados, para que nenhuma ROI fique órfã por diferenças cosméticas na
 escrita de um caminho.
 
 ```{r inputs-rois}
-df_rois <- fetch_rois(rois_path = "rois.duckdb")
+df_rois <- fetch_rois(rois_path = "rois.duckdb", shape = "signals")
 glimpse(df_rois)
+```
+
+A tabela vem no formato de sinais do monitoraSom: 45 colunas, uma linha por
+ROI. As colunas `det_*` e `val_*` ficam vazias aqui, porque guardam dados de
+detecções e de validações. Com `shape = "rois"`, a função devolve o formato
+das versões anteriores, de 20 colunas.
+
+O banco `rois.duckdb` não abre em planilha. O comando abaixo grava as 72 ROIs em
+CSV, lendo o banco inteiro de uma vez:
+
+```{r rois-to-csv}
+export_rois_duckdb_to_csv("rois.duckdb", "rois.csv", overwrite = TRUE)
 ```
 
 ## Verificando as gravações antes de analisar
@@ -204,7 +219,8 @@ launch_segmentation_app(
     roi_user = "your-name",
     soundscapes_path = "soundscapes", # pasta onde estão as soundscapes
     roi_db = "rois.duckdb",
-    zoom_freq = c(0, 9), wl = 1024, ovlp = 50, dyn_range = c(-96, -36)
+    zoom_freq = c(0, 9), wl = 1024, ovlp = 50, dyn_range = c(-96, -36),
+    csv_mirror = TRUE # ao encerrar a sessão, grava rois_mirror.csv
 )
 ```
 
@@ -322,7 +338,30 @@ template_matching(
   soundscapes_path = "soundscapes/",
   templates_path = "templates/templates.duckdb",
   min_score = 0.4,
-  output_db = "detections/detections.duckdb"
+  output_db = "detections/detections.duckdb",
+  csv_mirror = TRUE   # grava também detections/detections_mirror.csv
+)
+```
+
+Com `csv_mirror = TRUE`, a função grava também uma cópia do banco inteiro em
+CSV, `detections/detections_mirror.csv`, depois da última escrita no banco. A
+cópia tem as mesmas colunas do banco. Um campo vazio no CSV é `NA`; por isso a
+leitura usa `na.strings = ""`. A cópia é só para leitura: editar o CSV não muda
+o banco. A cada nova escrita com `csv_mirror`, o arquivo é regravado inteiro.
+
+```{r detections-mirror}
+df_copia <- read.csv("detections/detections_mirror.csv", na.strings = "")
+dim(df_copia)
+```
+
+O banco de detecções também vira CSV com um comando. Por padrão a conversão
+emite o formato antigo, de 21 colunas; com `legacy = FALSE` o CSV leva também
+`detection_id`, `template_id` e `score_method`:
+
+```{r detections-to-csv}
+export_detections_duckdb_to_csv(
+  "detections/detections.duckdb", "detections/detections.csv",
+  overwrite = TRUE
 )
 ```
 
@@ -448,7 +487,9 @@ launch_validation_app(
   templates_path = "templates",                 # cortes, para o painel lateral
   val_subset = "NV",                            # fila: só o que falta validar
   dyn_range_templ = c(-90, -6), dyn_range_detec = c(-90, -36),
-  wl = 512, ovlp = 50
+  wl = 512, ovlp = 50,
+  csv_mirror = TRUE   # ao confirmar o fim da sessão, regrava
+                      # detections/detections_mirror.csv com os vereditos
 )
 ```
 
@@ -656,12 +697,14 @@ basileuterus-culicivorus/
 ├── recordings/                    as 2 gravações focais (já existia)
 ├── soundscapes/                   as 12 gravações de busca (já existia)
 ├── soundscapes_metadata.duckdb    ← criado ao ler os metadados
+├── soundscapes_metadata_mirror.csv ← cópia em CSV do banco acima
 ├── templates/                     ← criado ao recortar os templates
 │   ├── templates.duckdb           o manifesto: 1 linha por template
 │   └── Bcu_1_…wav                 os 6 cortes de áudio
 └── detections/
-    └── detections.duckdb          ← criado pelo matching; guarda as detecções
-                                     e os vereditos das duas validações
+    ├── detections.duckdb          ← criado pelo matching; guarda as detecções
+    │                                e os vereditos das duas validações
+    └── detections_mirror.csv      ← cópia em CSV do banco acima
 ```
 
 | Arquivo | Quem cria | Para que serve |
@@ -670,6 +713,7 @@ basileuterus-culicivorus/
 | `templates/*.wav` | `export_templates()` | os templates recortados, que a busca usa como referência |
 | `templates/templates.duckdb` | `export_templates()` | o manifesto que descreve os cortes; `fetch_template_metadata()` o lê, diretamente ou via a pasta `templates/` |
 | `detections/detections.duckdb` | `template_matching(output_db =)` | as detecções em disco; é o banco que a validação por sobreposição e o app de validação leem e atualizam |
+| `*_mirror.csv` | o argumento `csv_mirror = TRUE` | cópia em CSV de um banco, para abrir em planilha; só leitura, regravada inteira a cada escrita |
 
 Nenhum desses arquivos precisa ser guardado: se você apagar qualquer um deles,
 os comandos acima o recriam de forma idêntica. A ressalva é a mesma do app de
