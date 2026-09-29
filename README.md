@@ -31,7 +31,18 @@ battery readings come from; do not move it.
 
 ## Getting the data
 
-The easiest route is from R, with the package installed:
+The easiest route is from R. Install the package with
+[pak](https://pak.r-lib.org/), then download the data:
+
+```r
+install.packages("pak")
+pak::pkg_install("ConservaSom/monitoraSom@v1.2.0.2")
+```
+
+On Ubuntu Linux, the `duckdb` dependency builds from source and takes several
+minutes. See the package
+[README](https://github.com/ConservaSom/monitoraSom#setup-and-installation)
+for a faster route.
 
 ```r
 monitoraSom::fetch_example_data()   # opt-in download into your user cache
