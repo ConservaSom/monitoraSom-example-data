@@ -36,7 +36,7 @@ The easiest route is from R. Install the package with
 
 ```r
 install.packages("pak")
-pak::pkg_install("ConservaSom/monitoraSom@v1.2.0.2")
+pak::pkg_install("ConservaSom/monitoraSom@v1.2.0.3")
 ```
 
 On Ubuntu Linux, the `duckdb` dependency builds from source and takes several
